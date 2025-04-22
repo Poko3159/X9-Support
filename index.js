@@ -108,4 +108,5 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-client.login(process.env.TOKEN);
+// Use DISCORD_TOKEN from environment
+client.login(process.env.DISCORD_TOKEN);
