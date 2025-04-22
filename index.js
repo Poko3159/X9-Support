@@ -1,5 +1,5 @@
 const express = require("express");
-const { Client, GatewayIntentBits, Events, EmbedBuilder, Partials } = require("discord.js");
+const { Client, GatewayIntentBits, Events, EmbedBuilder, Partials, ChannelType } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
@@ -25,6 +25,7 @@ const LOGS_DIR = path.join(__dirname, "logs");
 if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 
 const userTickets = {};
+const channelToUserMap = {};
 
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -33,12 +34,48 @@ client.once(Events.ClientReady, () => {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  const isStaff = message.member?.roles.cache.some(role => role.name === "Staff");
+  const isStaff = message.guild && message.member?.roles.cache.some(role => role.name === "Staff");
+  const modmailCategoryName = "modmails";
+
+  // Handle user DM (create ticket)
+  if (!message.guild) {
+    const userId = message.author.id;
+    const guild = client.guilds.cache.first();
+    const category = guild.channels.cache.find(c => c.name === modmailCategoryName && c.type === ChannelType.GuildCategory);
+
+    const existingChannel = guild.channels.cache.find(ch => channelToUserMap[ch.id] === userId);
+    if (existingChannel) return existingChannel.send(`New message from **${message.author.tag}**: ${message.content}`);
+
+    const ticketChannel = await guild.channels.create({
+      name: `ticket-${message.author.username}`,
+      type: ChannelType.GuildText,
+      parent: category?.id,
+      permissionOverwrites: [
+        {
+          id: guild.roles.everyone,
+          deny: ['ViewChannel']
+        },
+        {
+          id: guild.roles.cache.find(role => role.name === "Staff").id,
+          allow: ['ViewChannel', 'SendMessages']
+        }
+      ]
+    });
+
+    channelToUserMap[ticketChannel.id] = userId;
+    if (!userTickets[userId]) userTickets[userId] = [];
+    userTickets[userId].push({ channelId: ticketChannel.id, messages: [] });
+
+    ticketChannel.send(`New ticket from **${message.author.tag}**`);
+    return;
+  }
+
+  // Handle commands and logging inside ticket channel
   const ticketChannel = message.channel;
-  const userId = message.author.id;
+  const userId = channelToUserMap[ticketChannel.id];
+  if (!userId) return;
 
   if (!userTickets[userId]) userTickets[userId] = [];
-
   let ticket = userTickets[userId].find(t => t.channelId === ticketChannel.id);
   if (!ticket) {
     ticket = { channelId: ticketChannel.id, messages: [] };
@@ -54,16 +91,17 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.content.startsWith('!r ')) {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const replyContent = message.content.slice(3).trim();
+    const user = await client.users.fetch(userId);
+    user.send(`**Staff Reply:** ${replyContent}`).catch(() => {
+      ticketChannel.send("Failed to send DM to the user.");
+    });
     return ticketChannel.send(`**Staff Reply:** ${replyContent}`);
   }
 
-  if (message.content.startsWith('!logs')) {
+  if (message.content === '!logs') {
     if (!isStaff) return message.reply("Only staff can use this command.");
-    const target = message.mentions.users.first();
-    if (!target) return message.reply("Mention a user to view logs.");
-
-    const logs = userTickets[target.id];
-    if (!logs || logs.length === 0) return message.reply("No logs found for that user.");
+    const logs = userTickets[userId];
+    if (!logs || logs.length === 0) return message.reply("No logs found for this user.");
 
     let currentPage = 0;
 
@@ -82,13 +120,12 @@ client.on(Events.MessageCreate, async (message) => {
     };
 
     try {
-      const dm = await message.author.send({ embeds: [formatEmbed(currentPage)] });
-      await dm.react('⬅️');
-      await dm.react('➡️');
+      const reply = await message.reply({ embeds: [formatEmbed(currentPage)] });
+      await reply.react('⬅️');
+      await reply.react('➡️');
 
-      const collector = dm.createReactionCollector({
-        filter: (reaction, user) =>
-          ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id,
+      const collector = reply.createReactionCollector({
+        filter: (reaction, user) => ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id,
         time: 120000
       });
 
@@ -99,12 +136,11 @@ client.on(Events.MessageCreate, async (message) => {
         } else if (reaction.emoji.name === '⬅️') {
           currentPage = (currentPage - 1 + logs.length) % logs.length;
         }
-        dm.edit({ embeds: [formatEmbed(currentPage)] });
+        reply.edit({ embeds: [formatEmbed(currentPage)] });
       });
 
     } catch (err) {
-      console.error("DM error:", err);
-      message.reply("Couldn't send logs via DM. Are your DMs open?");
+      console.error("Error sending logs:", err);
     }
     return;
   }
@@ -112,14 +148,10 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.content === '!c') {
     if (!isStaff) return message.reply("Only staff can close tickets.");
 
-    // Find ticket for this channel and mark it closed
-    for (const [uid, tickets] of Object.entries(userTickets)) {
-      const t = tickets.find(t => t.channelId === ticketChannel.id);
-      if (t) {
-        t.closedBy = message.author.tag;
-        t.closedAt = new Date().toISOString();
-        break;
-      }
+    const ticket = userTickets[userId].find(t => t.channelId === ticketChannel.id);
+    if (ticket) {
+      ticket.closedBy = message.author.tag;
+      ticket.closedAt = new Date().toISOString();
     }
 
     await ticketChannel.send("Ticket has been closed and will be deleted in 5 seconds.");
