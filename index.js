@@ -35,8 +35,22 @@ if (fs.existsSync(DATA_FILE)) {
   channelToUserMap = raw.channelToUserMap || {};
 }
 
+// Debounced and safe file saving
+let saveTimeout;
 function saveTicketData() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify({ userTickets, channelToUserMap }, null, 2));
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    const tempFile = DATA_FILE + ".tmp";
+    fs.writeFile(tempFile, JSON.stringify({ userTickets, channelToUserMap }, null, 2), (err) => {
+      if (err) {
+        console.error("Error writing ticket data:", err);
+        return;
+      }
+      fs.rename(tempFile, DATA_FILE, (err) => {
+        if (err) console.error("Error renaming temp ticket data file:", err);
+      });
+    });
+  }, 1000);
 }
 
 client.once(Events.ClientReady, () => {
