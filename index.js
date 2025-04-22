@@ -43,8 +43,11 @@ client.on(Events.MessageCreate, async (message) => {
     const guild = client.guilds.cache.first();
     const category = guild.channels.cache.find(c => c.name === modmailCategoryName && c.type === ChannelType.GuildCategory);
 
-    const existingChannel = guild.channels.cache.find(ch => channelToUserMap[ch.id] === userId);
-    if (existingChannel) return existingChannel.send(`New message from **${message.author.tag}**: ${message.content}`);
+    const existingChannel = Object.entries(channelToUserMap).find(([, id]) => id === userId);
+    if (existingChannel) {
+      const existing = guild.channels.cache.get(existingChannel[0]);
+      if (existing) return existing.send(`New message from **${message.author.tag}**: ${message.content}`);
+    }
 
     const ticketChannel = await guild.channels.create({
       name: `ticket-${message.author.username}`,
@@ -121,23 +124,27 @@ client.on(Events.MessageCreate, async (message) => {
 
     try {
       const reply = await message.reply({ embeds: [formatEmbed(currentPage)] });
-      await reply.react('⬅️');
-      await reply.react('➡️');
-
       const collector = reply.createReactionCollector({
         filter: (reaction, user) => ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id,
         time: 120000
       });
 
-      collector.on('collect', (reaction) => {
-        reaction.users.remove(message.author).catch(() => {});
+      collector.on('collect', async (reaction) => {
+        try {
+          await reaction.users.remove(message.author);
+        } catch {}
+
         if (reaction.emoji.name === '➡️') {
           currentPage = (currentPage + 1) % logs.length;
         } else if (reaction.emoji.name === '⬅️') {
           currentPage = (currentPage - 1 + logs.length) % logs.length;
         }
-        reply.edit({ embeds: [formatEmbed(currentPage)] });
+
+        await reply.edit({ embeds: [formatEmbed(currentPage)] });
       });
+
+      await reply.react('⬅️');
+      await reply.react('➡️');
 
     } catch (err) {
       console.error("Error sending logs:", err);
@@ -157,6 +164,7 @@ client.on(Events.MessageCreate, async (message) => {
     await ticketChannel.send("Ticket has been closed and will be deleted in 5 seconds.");
     setTimeout(() => {
       ticketChannel.delete().catch(() => {});
+      delete channelToUserMap[ticketChannel.id];
     }, 5000);
     return;
   }
