@@ -24,8 +24,20 @@ const client = new Client({
 const LOGS_DIR = path.join(__dirname, "logs");
 if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 
-const userTickets = {};
-const channelToUserMap = {};
+const DATA_FILE = path.join(__dirname, "ticketData.json");
+
+let userTickets = {};
+let channelToUserMap = {};
+
+if (fs.existsSync(DATA_FILE)) {
+  const raw = JSON.parse(fs.readFileSync(DATA_FILE));
+  userTickets = raw.userTickets || {};
+  channelToUserMap = raw.channelToUserMap || {};
+}
+
+function saveTicketData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify({ userTickets, channelToUserMap }, null, 2));
+}
 
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -48,11 +60,13 @@ client.on(Events.MessageCreate, async (message) => {
       const existing = guild.channels.cache.get(existingChannel[0]);
       if (existing) {
         const ticket = userTickets[userId]?.find(t => t.channelId === existing.id);
-        ticket?.messages.push({
+        const msg = {
           author: message.author.tag,
           content: message.content,
           timestamp: new Date().toISOString()
-        });
+        };
+        ticket?.messages.push(msg);
+        saveTicketData();
         return existing.send(`New message from **${message.author.tag}**: ${message.content}`);
       }
     }
@@ -80,6 +94,7 @@ client.on(Events.MessageCreate, async (message) => {
       messages: []
     };
     userTickets[userId].push(newTicket);
+    saveTicketData();
 
     ticketChannel.send({
       content: `📬 New ticket from <@${message.author.id}> (**${message.author.tag}**)`,
@@ -93,6 +108,7 @@ client.on(Events.MessageCreate, async (message) => {
       timestamp: new Date().toISOString()
     };
     newTicket.messages.push(firstMessage);
+    saveTicketData();
     ticketChannel.send(`**${firstMessage.author}:** ${firstMessage.content}`);
     return;
   }
@@ -114,6 +130,7 @@ client.on(Events.MessageCreate, async (message) => {
     content: message.content,
     timestamp: new Date().toISOString()
   });
+  saveTicketData();
 
   if (message.content.startsWith('!r ')) {
     if (!isStaff) return message.reply("Only staff can use this command.");
@@ -170,12 +187,14 @@ client.on(Events.MessageCreate, async (message) => {
     if (ticket) {
       ticket.closedBy = message.author.tag;
       ticket.closedAt = new Date().toISOString();
+      saveTicketData();
     }
 
     await ticketChannel.send("Ticket has been closed and will be deleted in 5 seconds.");
     setTimeout(() => {
       ticketChannel.delete().catch(() => {});
       delete channelToUserMap[ticketChannel.id];
+      saveTicketData();
     }, 5000);
     return;
   }
