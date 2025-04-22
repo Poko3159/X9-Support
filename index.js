@@ -1,6 +1,14 @@
-const { Client, GatewayIntentBits, Events, EmbedBuilder } = require('discord.js');
-require('dotenv').config();
+const express = require("express");
+const { Client, GatewayIntentBits, Events, EmbedBuilder, Partials } = require("discord.js");
+require("dotenv").config();
 
+const app = express();
+app.get("/", (req, res) => res.send("Ticket bot is running!"));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+
+// Discord bot setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -9,10 +17,10 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.DirectMessages
   ],
-  partials: ['CHANNEL']
+  partials: [Partials.Channel] // needed for DMs
 });
 
-// In-memory ticket log structure
+// In-memory ticket log
 const userTickets = {};
 
 client.once(Events.ClientReady, () => {
@@ -26,7 +34,6 @@ client.on(Events.MessageCreate, async (message) => {
   const ticketChannel = message.channel;
   const userId = message.author.id;
 
-  // Store messages by user and channel
   if (!userTickets[userId]) userTickets[userId] = [];
 
   let ticket = userTickets[userId].find(t => t.channelId === ticketChannel.id);
@@ -41,15 +48,12 @@ client.on(Events.MessageCreate, async (message) => {
     timestamp: new Date().toISOString()
   });
 
-  // Handle !r <message>
   if (message.content.startsWith('!r ')) {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const replyContent = message.content.slice(3).trim();
-    ticketChannel.send(`**Staff Reply:** ${replyContent}`);
-    return;
+    return ticketChannel.send(`**Staff Reply:** ${replyContent}`);
   }
 
-  // Handle !logs @user with reaction-based pagination
   if (message.content.startsWith('!logs')) {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const target = message.mentions.users.first();
@@ -98,7 +102,6 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  // Handle !c - close ticket
   if (message.content === '!c') {
     if (!isStaff) return message.reply("Only staff can close tickets.");
     await ticketChannel.send("Ticket has been closed by staff.");
@@ -108,5 +111,5 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-// Use DISCORD_TOKEN from environment
+// Start the bot
 client.login(process.env.DISCORD_TOKEN);
