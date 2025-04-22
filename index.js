@@ -46,7 +46,15 @@ client.on(Events.MessageCreate, async (message) => {
     const existingChannel = Object.entries(channelToUserMap).find(([, id]) => id === userId);
     if (existingChannel) {
       const existing = guild.channels.cache.get(existingChannel[0]);
-      if (existing) return existing.send(`New message from **${message.author.tag}**: ${message.content}`);
+      if (existing) {
+        const ticket = userTickets[userId]?.find(t => t.channelId === existing.id);
+        ticket?.messages.push({
+          author: message.author.tag,
+          content: message.content,
+          timestamp: new Date().toISOString()
+        });
+        return existing.send(`New message from **${message.author.tag}**: ${message.content}`);
+      }
     }
 
     const ticketChannel = await guild.channels.create({
@@ -67,9 +75,18 @@ client.on(Events.MessageCreate, async (message) => {
 
     channelToUserMap[ticketChannel.id] = userId;
     if (!userTickets[userId]) userTickets[userId] = [];
-    userTickets[userId].push({ channelId: ticketChannel.id, messages: [] });
+    userTickets[userId].push({
+      channelId: ticketChannel.id,
+      messages: [
+        {
+          author: message.author.tag,
+          content: message.content,
+          timestamp: new Date().toISOString()
+        }
+      ]
+    });
 
-    ticketChannel.send(`New ticket from **${message.author.tag}**`);
+    ticketChannel.send(`New ticket from <@${message.author.id}> (**${message.author.tag}**)`);
     return;
   }
 
@@ -106,50 +123,19 @@ client.on(Events.MessageCreate, async (message) => {
     const logs = userTickets[userId];
     if (!logs || logs.length === 0) return message.reply("No logs found for this user.");
 
-    let currentPage = 0;
+    const formattedLogs = logs.map((ticket, index) => {
+      const header = `--- Ticket ${index + 1} (Channel: ${ticket.channelId}) ---\n`;
+      const body = ticket.messages.map(m => `**${m.author}**: ${m.content}`).join('\n');
+      const footer = ticket.closedBy ? `\nClosed by ${ticket.closedBy} on ${new Date(ticket.closedAt).toLocaleString()}` : "";
+      return `${header}${body}${footer}`;
+    }).join('\n\n');
 
-    const formatEmbed = (index) => {
-      const ticket = logs[index];
-      const messages = ticket.messages.map(m => `**${m.author}**: ${m.content}`).join('\n').slice(0, 4000) || "No messages.";
-      let footer = `Channel ID: ${ticket.channelId}`;
-      if (ticket.closedBy && ticket.closedAt) {
-        footer += ` • Closed by ${ticket.closedBy} on ${new Date(ticket.closedAt).toLocaleString()}`;
-      }
-      return new EmbedBuilder()
-        .setTitle(`Ticket ${index + 1} of ${logs.length}`)
-        .setDescription(messages)
-        .setFooter({ text: footer })
-        .setColor(0x2f3136);
-    };
-
-    try {
-      const reply = await message.reply({ embeds: [formatEmbed(currentPage)] });
-      const collector = reply.createReactionCollector({
-        filter: (reaction, user) => ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id,
-        time: 120000
-      });
-
-      collector.on('collect', async (reaction) => {
-        try {
-          await reaction.users.remove(message.author);
-        } catch {}
-
-        if (reaction.emoji.name === '➡️') {
-          currentPage = (currentPage + 1) % logs.length;
-        } else if (reaction.emoji.name === '⬅️') {
-          currentPage = (currentPage - 1 + logs.length) % logs.length;
-        }
-
-        await reply.edit({ embeds: [formatEmbed(currentPage)] });
-      });
-
-      await reply.react('⬅️');
-      await reply.react('➡️');
-
-    } catch (err) {
-      console.error("Error sending logs:", err);
-    }
-    return;
+    return message.reply({ content: `\u200B`, embeds: [
+      new EmbedBuilder()
+        .setTitle("Ticket Logs")
+        .setDescription(formattedLogs.slice(0, 4000))
+        .setColor(0x2f3136)
+    ] });
   }
 
   if (message.content === '!c') {
