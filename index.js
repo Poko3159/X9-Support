@@ -75,7 +75,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     channelToUserMap[ticketChannel.id] = userId;
     if (!userTickets[userId]) userTickets[userId] = [];
-    userTickets[userId].push({
+    const newTicket = {
       channelId: ticketChannel.id,
       messages: [
         {
@@ -84,9 +84,16 @@ client.on(Events.MessageCreate, async (message) => {
           timestamp: new Date().toISOString()
         }
       ]
+    };
+    userTickets[userId].push(newTicket);
+
+    ticketChannel.send({
+      content: `📬 New ticket from <@${message.author.id}> (**${message.author.tag}**)`,
+      allowedMentions: { users: [] }
     });
 
-    ticketChannel.send(`New ticket from <@${message.author.id}> (**${message.author.tag}**)`);
+    // Log and forward first message
+    ticketChannel.send(`**${message.author.tag}:** ${message.content}`);
     return;
   }
 
