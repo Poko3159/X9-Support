@@ -125,6 +125,24 @@ client.on(Events.MessageCreate, async (message) => {
     return ticketChannel.send(`**Staff Reply:** ${replyContent}`);
   }
 
+  if (message.content === '!awaitingresponse') {
+    if (!isStaff) return message.reply("Only staff can use this command.");
+    const user = await client.users.fetch(userId);
+    user.send("Hello. We are still awaiting a response. Please reply at your earliest convenience. The X9 Staff Team").catch(() => {
+      ticketChannel.send("Failed to send DM to the user.");
+    });
+    return ticketChannel.send("**Staff Reminder Sent:** Awaiting response message sent to user.");
+  }
+
+  if (message.content === '!Hi') {
+    if (!isStaff) return message.reply("Only staff can use this command.");
+    const user = await client.users.fetch(userId);
+    user.send("Hello! How can we help?").catch(() => {
+      ticketChannel.send("Failed to send DM to the user.");
+    });
+    return ticketChannel.send("**Staff Greeting Sent:** 'Hello! How can we help?' sent to user.");
+  }
+
   if (message.content === '!logs') {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const logs = userTickets[userId];
