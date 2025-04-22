@@ -1,22 +1,29 @@
-const { 
-  Client, GatewayIntentBits, Partials, ChannelType, Events, PermissionsBitField, EmbedBuilder 
-} = require('discord.js');
+const { Client, GatewayIntentBits, Events, EmbedBuilder, ChannelType, PermissionsBitField } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Channel]
+  partials: ['CHANNEL']
 });
 
-// In-memory logs
-const userLogs = {}; // { userId: [ { author, content, timestamp } ] }
-const userTickets = {}; // { userId: channelId }
+const LOGS_FILE = path.join(__dirname, "logs.json");
+let userTickets = fs.existsSync(LOGS_FILE)
+  ? JSON.parse(fs.readFileSync(LOGS_FILE, "utf-8"))
+  : {};
+
+function saveLogsToFile() {
+  fs.writeFileSync(LOGS_FILE, JSON.stringify(userTickets, null, 2));
+}
+
+const MODMAIL_CATEGORY_NAME = 'modmails';
 
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -25,132 +32,158 @@ client.once(Events.ClientReady, () => {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  const guild = client.guilds.cache.first();
-
-  // User sends a DM to the bot
+  // Handle DMs from users (create ticket)
   if (message.channel.type === ChannelType.DM) {
-    const modmailCategory = guild.channels.cache.find(c => c.name.toLowerCase() === 'modmails' && c.type === ChannelType.GuildCategory);
-    if (!modmailCategory) return console.error("No 'modmails' category found.");
+    const guild = client.guilds.cache.first();
+    if (!guild) return;
+
+    const category = guild.channels.cache.find(c =>
+      c.type === ChannelType.GuildCategory &&
+      c.name.toLowerCase() === MODMAIL_CATEGORY_NAME
+    );
+
+    if (!category) {
+      console.error(`Category '${MODMAIL_CATEGORY_NAME}' not found.`);
+      return;
+    }
 
     let channel = guild.channels.cache.find(c => c.topic === `UserID: ${message.author.id}`);
+
     if (!channel) {
       channel = await guild.channels.create({
-        name: `ticket-${message.author.username.toLowerCase()}`,
+        name: `ticket-${message.author.username}`,
         type: ChannelType.GuildText,
-        parent: modmailCategory.id,
+        parent: category.id,
         topic: `UserID: ${message.author.id}`,
         permissionOverwrites: [
           {
-            id: guild.roles.cache.find(r => r.name === "Staff").id,
-            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+            id: guild.roles.everyone,
+            deny: [PermissionsBitField.Flags.ViewChannel],
           },
           {
-            id: guild.roles.everyone,
-            deny: [PermissionsBitField.Flags.ViewChannel]
+            id: guild.roles.cache.find(r => r.name === "Staff").id,
+            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
           }
         ]
       });
 
-      await channel.send(`New ticket from **${message.author.tag}** (${message.author.id})`);
+      channel.send(`New ticket opened by **${message.author.tag}** (${message.author.id})`);
     }
 
-    userTickets[message.author.id] = channel.id;
+    channel.send(`**User:** ${message.content}`);
 
-    logMessage(message.author.id, message.author.tag, message.content);
+    if (!userTickets[message.author.id]) {
+      userTickets[message.author.id] = [];
+    }
 
-    return channel.send(`**${message.author.tag}**: ${message.content}`);
+    let ticket = userTickets[message.author.id].find(t => t.channelId === channel.id);
+    if (!ticket) {
+      ticket = { channelId: channel.id, messages: [] };
+      userTickets[message.author.id].push(ticket);
+    }
+
+    ticket.messages.push({
+      author: message.author.tag,
+      content: message.content,
+      timestamp: new Date().toISOString()
+    });
+
+    saveLogsToFile();
+    return;
   }
 
-  // Inside a ticket channel
-  if (message.channel.parent?.name.toLowerCase() === 'modmails') {
-    const isStaff = message.member?.roles.cache.some(role => role.name === "Staff");
-    if (!isStaff) return;
+  // From inside a modmail channel
+  const isStaff = message.member?.roles.cache.some(r => r.name === "Staff");
+  const ticketChannel = message.channel;
+  const ticketOwnerId = Object.keys(userTickets).find(uid =>
+    userTickets[uid].some(t => t.channelId === ticketChannel.id)
+  );
 
-    const userId = message.channel.topic?.split("UserID: ")[1];
-    if (!userId) return;
+  if (!ticketOwnerId) return;
 
-    if (message.content.startsWith('!r ')) {
-      const reply = message.content.slice(3).trim();
-      try {
-        const user = await client.users.fetch(userId);
-        await user.send(`**Staff Reply:** ${reply}`);
-        await message.channel.send(`✉️ Replied to **${user.tag}**`);
-        logMessage(userId, `Staff (${message.author.tag})`, reply);
-      } catch (err) {
-        console.error("Failed to DM user:", err);
-        message.channel.send("❌ Could not send the message to the user.");
-      }
+  const ticket = userTickets[ticketOwnerId].find(t => t.channelId === ticketChannel.id);
+
+  ticket.messages.push({
+    author: message.author.tag,
+    content: message.content,
+    timestamp: new Date().toISOString()
+  });
+
+  saveLogsToFile();
+
+  // Staff replies with !r
+  if (message.content.startsWith('!r ')) {
+    if (!isStaff) return message.reply("Only staff can use this command.");
+    const replyContent = message.content.slice(3).trim();
+    const user = await client.users.fetch(ticketOwnerId);
+    user.send(`**Staff:** ${replyContent}`).catch(() => {
+      message.reply("Failed to send message to user.");
+    });
+    return;
+  }
+
+  // Staff closes ticket
+  if (message.content === '!c') {
+    if (!isStaff) return message.reply("Only staff can close tickets.");
+    await ticketChannel.send("Ticket has been closed by staff.");
+    await ticketChannel.setLocked(true).catch(() => {});
+    await ticketChannel.setArchived(true).catch(() => {});
+    return;
+  }
+
+  // Staff views logs
+  if (message.content.startsWith('!logs')) {
+    if (!isStaff) return message.reply("Only staff can use this command.");
+    const target = message.mentions.users.first();
+    if (!target) return message.reply("Mention a user to view logs.");
+
+    const logs = userTickets[target.id];
+    if (!logs || logs.length === 0) return message.reply("No logs found for that user.");
+
+    let currentPage = 0;
+
+    const formatEmbed = (index) => {
+      const ticket = logs[index];
+      const messages = ticket.messages.map(m => `**${m.author}**: ${m.content}`).join('\n').slice(0, 4000) || "No messages.";
+      return new EmbedBuilder()
+        .setTitle(`Ticket ${index + 1} of ${logs.length}`)
+        .setDescription(messages)
+        .setFooter({ text: `Channel ID: ${ticket.channelId}` })
+        .setColor(0x2f3136);
+    };
+
+    try {
+      const dm = await message.author.send({ embeds: [formatEmbed(currentPage)] });
+      await dm.react('⬅️');
+      await dm.react('➡️');
+
+      const collector = dm.createReactionCollector({
+        filter: (reaction, user) =>
+          ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id,
+        time: 120000
+      });
+
+      collector.on('collect', (reaction) => {
+        reaction.users.remove(message.author).catch(() => {});
+        if (reaction.emoji.name === '➡️') {
+          currentPage = (currentPage + 1) % logs.length;
+        } else if (reaction.emoji.name === '⬅️') {
+          currentPage = (currentPage - 1 + logs.length) % logs.length;
+        }
+        dm.edit({ embeds: [formatEmbed(currentPage)] });
+      });
+
+    } catch (err) {
+      console.error("DM error:", err);
+      message.reply("Couldn't send logs via DM. Are your DMs open?");
     }
+    return;
+  }
 
-    else if (message.content === '!c') {
-      await message.channel.send("Ticket has been closed.");
-      await message.channel.setLocked(true).catch(() => {});
-      await message.channel.setArchived(true).catch(() => {});
-    }
-
-    else if (message.content.startsWith('!logs')) {
-      const target = message.mentions.users.first();
-      if (!target) return message.reply("Mention a user to view logs.");
-
-      const logs = userLogs[target.id];
-      if (!logs || logs.length === 0) return message.reply("No logs found for that user.");
-
-      let currentPage = 0;
-
-      const formatEmbed = (index) => {
-        const start = index * 10;
-        const pageLogs = logs.slice(start, start + 10);
-        const description = pageLogs.map(log =>
-          `**${log.author}**: ${log.content} (${new Date(log.timestamp).toLocaleString()})`
-        ).join('\n');
-
-        return new EmbedBuilder()
-          .setTitle(`Logs for ${target.tag} (Page ${index + 1}/${Math.ceil(logs.length / 10)})`)
-          .setDescription(description || "No messages.")
-          .setColor(0x2f3136);
-      };
-
-      try {
-        const dm = await message.author.send({ embeds: [formatEmbed(currentPage)] });
-        await dm.react('⬅️');
-        await dm.react('➡️');
-
-        const collector = dm.createReactionCollector({
-          filter: (reaction, user) =>
-            ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id,
-          time: 120000
-        });
-
-        collector.on('collect', (reaction) => {
-          reaction.users.remove(message.author).catch(() => {});
-          if (reaction.emoji.name === '➡️') {
-            if ((currentPage + 1) * 10 < logs.length) currentPage++;
-          } else if (reaction.emoji.name === '⬅️') {
-            if (currentPage > 0) currentPage--;
-          }
-          dm.edit({ embeds: [formatEmbed(currentPage)] });
-        });
-
-      } catch (err) {
-        console.error("DM error:", err);
-        message.reply("Couldn't send logs via DM. Are your DMs open?");
-      }
-    }
-
-    else {
-      // Internal discussion
-      logMessage(userId, `Internal (${message.author.tag})`, message.content);
-    }
+  // Any other message = internal note
+  if (isStaff) {
+    ticketChannel.send(`*Internal note by ${message.author.tag}:* ${message.content}`);
   }
 });
-
-function logMessage(userId, author, content) {
-  if (!userLogs[userId]) userLogs[userId] = [];
-  userLogs[userId].push({
-    author,
-    content,
-    timestamp: Date.now()
-  });
-}
 
 client.login(process.env.DISCORD_TOKEN);
