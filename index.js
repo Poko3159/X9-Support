@@ -75,7 +75,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     channelToUserMap[ticketChannel.id] = userId;
     if (!userTickets[userId]) userTickets[userId] = [];
-    userTickets[userId].push({
+    const newTicket = {
       channelId: ticketChannel.id,
       messages: [
         {
@@ -84,9 +84,16 @@ client.on(Events.MessageCreate, async (message) => {
           timestamp: new Date().toISOString()
         }
       ]
+    };
+    userTickets[userId].push(newTicket);
+
+    ticketChannel.send({
+      content: `📬 New ticket from <@${message.author.id}> (**${message.author.tag}**)`,
+      allowedMentions: { users: [] }
     });
 
-    ticketChannel.send(`New ticket from <@${message.author.id}> (**${message.author.tag}**)`);
+    // Log and forward first message
+    ticketChannel.send(`**${message.author.tag}:** ${message.content}`);
     return;
   }
 
@@ -120,50 +127,22 @@ client.on(Events.MessageCreate, async (message) => {
 
   if (message.content === '!logs') {
     if (!isStaff) return message.reply("Only staff can use this command.");
-    
     const logs = userTickets[userId];
     if (!logs || logs.length === 0) return message.reply("No logs found for this user.");
 
-    let currentPage = 0;
-
-    const formatLogEmbed = (index) => {
-      const ticket = logs[index];
-      const header = `--- Ticket ${index + 1} ---\n`;
+    const formattedLogs = logs.map((ticket, index) => {
+      const header = `--- Ticket ${index + 1} (Channel: ${ticket.channelId}) ---\n`;
       const body = ticket.messages.map(m => `**${m.author}**: ${m.content}`).join('\n');
       const footer = ticket.closedBy ? `\nClosed by ${ticket.closedBy} on ${new Date(ticket.closedAt).toLocaleString()}` : "";
-      return new EmbedBuilder()
-        .setTitle(`Ticket Logs for <@${userId}>`)
-        .setDescription(header + body + footer)
-        .setColor(0x2f3136);
-    };
+      return `${header}${body}${footer}`;
+    }).join('\n\n');
 
-    try {
-      const logMessage = await message.author.send({ embeds: [formatLogEmbed(currentPage)] });
-      await logMessage.react('⬅️');
-      await logMessage.react('➡️');
-
-      const filter = (reaction, user) => 
-        ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id;
-
-      const collector = logMessage.createReactionCollector({
-        filter,
-        time: 60000 // 1 minute for reaction collection
-      });
-
-      collector.on('collect', (reaction) => {
-        reaction.users.remove(message.author);
-        if (reaction.emoji.name === '➡️') {
-          currentPage = (currentPage + 1) % logs.length;
-        } else if (reaction.emoji.name === '⬅️') {
-          currentPage = (currentPage - 1 + logs.length) % logs.length;
-        }
-        logMessage.edit({ embeds: [formatLogEmbed(currentPage)] });
-      });
-
-    } catch (err) {
-      console.error("Error sending logs:", err);
-      message.reply("Couldn't send logs via DM. Are your DMs open?");
-    }
+    return message.reply({ content: `\u200B`, embeds: [
+      new EmbedBuilder()
+        .setTitle("Ticket Logs")
+        .setDescription(formattedLogs.slice(0, 4000))
+        .setColor(0x2f3136)
+    ] });
   }
 
   if (message.content === '!c') {
