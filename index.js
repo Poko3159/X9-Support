@@ -1,115 +1,108 @@
-const express = require("express");
-const { Client, GatewayIntentBits, Events, EmbedBuilder, Partials } = require("discord.js");
-require("dotenv").config();
+const { Client, GatewayIntentBits, Partials, Events, PermissionsBitField } = require('discord.js');
+require('dotenv').config();
 
-const app = express();
-app.get("/", (req, res) => res.send("Ticket bot is running!"));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
-
-// Discord bot setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.GuildMembers
   ],
-  partials: [Partials.Channel] // needed for DMs
+  partials: [Partials.Channel]
 });
 
-// In-memory ticket log
-const userTickets = {};
+const MODMAIL_CATEGORY_NAME = 'modmails';
+const STAFF_ROLE_NAME = 'Staff';
+const ADMIN_ROLE_NAME = 'Admin';
+
+const activeTickets = new Map(); // userId -> channel
 
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
 client.on(Events.MessageCreate, async (message) => {
+  // Ignore bot messages
   if (message.author.bot) return;
 
-  const isStaff = message.member?.roles.cache.some(role => role.name === "Staff");
-  const ticketChannel = message.channel;
-  const userId = message.author.id;
+  // 1. Handle user DMs to create ticket
+  if (message.channel.type === 1) {
+    const guild = client.guilds.cache.first(); // assumes bot is in one guild
+    if (!guild) return;
 
-  if (!userTickets[userId]) userTickets[userId] = [];
+    let modmailCategory = guild.channels.cache.find(
+      c => c.name === MODMAIL_CATEGORY_NAME && c.type === 4
+    );
 
-  let ticket = userTickets[userId].find(t => t.channelId === ticketChannel.id);
-  if (!ticket) {
-    ticket = { channelId: ticketChannel.id, messages: [] };
-    userTickets[userId].push(ticket);
+    if (!modmailCategory) {
+      modmailCategory = await guild.channels.create({
+        name: MODMAIL_CATEGORY_NAME,
+        type: 4 // category
+      });
+    }
+
+    let ticketChannel = activeTickets.get(message.author.id);
+
+    if (!ticketChannel) {
+      ticketChannel = await guild.channels.create({
+        name: `ticket-${message.author.username}`,
+        type: 0, // text
+        parent: modmailCategory.id,
+        permissionOverwrites: [
+          {
+            id: guild.roles.everyone,
+            deny: [PermissionsBitField.Flags.ViewChannel]
+          },
+          {
+            id: client.user.id,
+            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+          },
+          {
+            id: guild.roles.cache.find(r => r.name === STAFF_ROLE_NAME)?.id,
+            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+          }
+        ]
+      });
+
+      activeTickets.set(message.author.id, ticketChannel);
+      ticketChannel.send(`New ticket opened by **${message.author.tag}**`);
+    }
+
+    ticketChannel.send(`**${message.author.tag}:** ${message.content}`);
+    return;
   }
 
-  ticket.messages.push({
-    author: message.author.tag,
-    content: message.content,
-    timestamp: new Date().toISOString()
-  });
+  // 2. Handle staff replies or internal notes
+  const guild = message.guild;
+  if (!guild) return;
 
+  const isStaff = message.member.roles.cache.some(r => r.name === STAFF_ROLE_NAME);
+  const isAdmin = message.member.roles.cache.some(r => r.name === ADMIN_ROLE_NAME);
+  if (!isStaff) return;
+
+  const ticketOwnerId = [...activeTickets.entries()].find(([, ch]) => ch.id === message.channel.id)?.[0];
+  const ticketUser = ticketOwnerId ? await client.users.fetch(ticketOwnerId) : null;
+
+  // !r reply to user
   if (message.content.startsWith('!r ')) {
-    if (!isStaff) return message.reply("Only staff can use this command.");
-    const replyContent = message.content.slice(3).trim();
-    return ticketChannel.send(`**Staff Reply:** ${replyContent}`);
-  }
-
-  if (message.content.startsWith('!logs')) {
-    if (!isStaff) return message.reply("Only staff can use this command.");
-    const target = message.mentions.users.first();
-    if (!target) return message.reply("Mention a user to view logs.");
-
-    const logs = userTickets[target.id];
-    if (!logs || logs.length === 0) return message.reply("No logs found for that user.");
-
-    let currentPage = 0;
-
-    const formatEmbed = (index) => {
-      const ticket = logs[index];
-      const messages = ticket.messages.map(m => `**${m.author}**: ${m.content}`).join('\n').slice(0, 4000) || "No messages.";
-      return new EmbedBuilder()
-        .setTitle(`Ticket ${index + 1} of ${logs.length}`)
-        .setDescription(messages)
-        .setFooter({ text: `Channel ID: ${ticket.channelId}` })
-        .setColor(0x2f3136);
-    };
-
+    if (!ticketUser) return message.channel.send('Cannot find user to reply to.');
+    const reply = message.content.slice(3).trim();
     try {
-      const dm = await message.author.send({ embeds: [formatEmbed(currentPage)] });
-      await dm.react('⬅️');
-      await dm.react('➡️');
-
-      const collector = dm.createReactionCollector({
-        filter: (reaction, user) =>
-          ['⬅️', '➡️'].includes(reaction.emoji.name) && user.id === message.author.id,
-        time: 120000
-      });
-
-      collector.on('collect', (reaction) => {
-        reaction.users.remove(message.author).catch(() => {});
-        if (reaction.emoji.name === '➡️') {
-          currentPage = (currentPage + 1) % logs.length;
-        } else if (reaction.emoji.name === '⬅️') {
-          currentPage = (currentPage - 1 + logs.length) % logs.length;
-        }
-        dm.edit({ embeds: [formatEmbed(currentPage)] });
-      });
-
-    } catch (err) {
-      console.error("DM error:", err);
-      message.reply("Couldn't send logs via DM. Are your DMs open?");
+      await ticketUser.send(`**Staff:** ${reply}`);
+      message.channel.send(`Replied to **${ticketUser.tag}**`);
+    } catch {
+      message.channel.send('Failed to send DM. The user may have DMs disabled.');
     }
     return;
   }
 
-  if (message.content === '!c') {
-    if (!isStaff) return message.reply("Only staff can close tickets.");
-    await ticketChannel.send("Ticket has been closed by staff.");
-    await ticketChannel.setLocked(true).catch(() => {});
-    await ticketChannel.setArchived(true).catch(() => {});
-    return;
+  // Internal note (admin-only)
+  if (!isAdmin) {
+    message.delete().catch(() => {});
+    message.channel.send("Only admins can send internal notes without using `!r`.")
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
   }
 });
-
-// Start the bot
+  
 client.login(process.env.DISCORD_TOKEN);
