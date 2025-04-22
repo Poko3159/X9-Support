@@ -77,13 +77,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (!userTickets[userId]) userTickets[userId] = [];
     const newTicket = {
       channelId: ticketChannel.id,
-      messages: [
-        {
-          author: message.author.tag,
-          content: message.content,
-          timestamp: new Date().toISOString()
-        }
-      ]
+      messages: []
     };
     userTickets[userId].push(newTicket);
 
@@ -93,7 +87,13 @@ client.on(Events.MessageCreate, async (message) => {
     });
 
     // Log and forward first message
-    ticketChannel.send(`**${message.author.tag}:** ${message.content}`);
+    const firstMessage = {
+      author: message.author.tag,
+      content: message.content,
+      timestamp: new Date().toISOString()
+    };
+    newTicket.messages.push(firstMessage);
+    ticketChannel.send(`**${firstMessage.author}:** ${firstMessage.content}`);
     return;
   }
 
@@ -125,7 +125,7 @@ client.on(Events.MessageCreate, async (message) => {
     return ticketChannel.send(`**Staff Reply:** ${replyContent}`);
   }
 
-  if (message.content === '!awaitingresponse') {
+  if (message.content.toLowerCase() === '!awaitingresponse') {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const user = await client.users.fetch(userId);
     user.send("Hello. We are still awaiting a response. Please reply at your earliest convenience. The X9 Staff Team").catch(() => {
@@ -134,7 +134,7 @@ client.on(Events.MessageCreate, async (message) => {
     return ticketChannel.send("**Staff Reminder Sent:** Awaiting response message sent to user.");
   }
 
-  if (message.content === '!Hi') {
+  if (message.content.toLowerCase() === '!hi') {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const user = await client.users.fetch(userId);
     user.send("Hello! How can we help?").catch(() => {
