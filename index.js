@@ -1,8 +1,15 @@
-const { Client, GatewayIntentBits, Events, EmbedBuilder, ChannelType, PermissionsBitField } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
-require('dotenv').config();
+const express = require("express");
+const { Client, GatewayIntentBits, Events, EmbedBuilder, Partials } = require("discord.js");
+require("dotenv").config();
 
+// Create the express app
+const app = express();
+app.get("/", (req, res) => res.send("Ticket bot is running!"));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+
+// Discord bot setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -11,97 +18,33 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.DirectMessages
   ],
-  partials: ['CHANNEL']
+  partials: [Partials.Channel] // needed for DMs
 });
 
-const LOGS_FILE = path.join(__dirname, "logs.json");
-let userTickets = fs.existsSync(LOGS_FILE)
-  ? JSON.parse(fs.readFileSync(LOGS_FILE, "utf-8"))
-  : {};
+// In-memory ticket log structure
+const userTickets = {};
 
-function saveLogsToFile() {
-  fs.writeFileSync(LOGS_FILE, JSON.stringify(userTickets, null, 2));
-}
-
-const MODMAIL_CATEGORY_NAME = 'modmails';
-
+// Handle bot login
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
+// Handle incoming messages
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  // Handle DMs from users (create ticket)
-  if (message.channel.type === ChannelType.DM) {
-    const guild = client.guilds.cache.first();
-    if (!guild) return;
-
-    const category = guild.channels.cache.find(c =>
-      c.type === ChannelType.GuildCategory &&
-      c.name.toLowerCase() === MODMAIL_CATEGORY_NAME
-    );
-
-    if (!category) {
-      console.error(`Category '${MODMAIL_CATEGORY_NAME}' not found.`);
-      return;
-    }
-
-    let channel = guild.channels.cache.find(c => c.topic === `UserID: ${message.author.id}`);
-
-    if (!channel) {
-      channel = await guild.channels.create({
-        name: `ticket-${message.author.username}`,
-        type: ChannelType.GuildText,
-        parent: category.id,
-        topic: `UserID: ${message.author.id}`,
-        permissionOverwrites: [
-          {
-            id: guild.roles.everyone,
-            deny: [PermissionsBitField.Flags.ViewChannel],
-          },
-          {
-            id: guild.roles.cache.find(r => r.name === "Staff").id,
-            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
-          }
-        ]
-      });
-
-      channel.send(`New ticket opened by **${message.author.tag}** (${message.author.id})`);
-    }
-
-    channel.send(`**User:** ${message.content}`);
-
-    if (!userTickets[message.author.id]) {
-      userTickets[message.author.id] = [];
-    }
-
-    let ticket = userTickets[message.author.id].find(t => t.channelId === channel.id);
-    if (!ticket) {
-      ticket = { channelId: channel.id, messages: [] };
-      userTickets[message.author.id].push(ticket);
-    }
-
-    ticket.messages.push({
-      author: message.author.tag,
-      content: message.content,
-      timestamp: new Date().toISOString()
-    });
-
-    saveLogsToFile();
-    return;
-  }
-
-  // From inside a modmail channel
-  const isStaff = message.member?.roles.cache.some(r => r.name === "Staff");
+  const isStaff = message.member?.roles.cache.some(role => role.name === "Staff");
   const ticketChannel = message.channel;
-  const ticketOwnerId = Object.keys(userTickets).find(uid =>
-    userTickets[uid].some(t => t.channelId === ticketChannel.id)
-  );
+  const userId = message.author.id;
 
-  if (!ticketOwnerId) return;
+  // Store messages by user and channel
+  if (!userTickets[userId]) userTickets[userId] = [];
 
-  const ticket = userTickets[ticketOwnerId].find(t => t.channelId === ticketChannel.id);
+  let ticket = userTickets[userId].find(t => t.channelId === ticketChannel.id);
+  if (!ticket) {
+    ticket = { channelId: ticketChannel.id, messages: [] };
+    userTickets[userId].push(ticket);
+  }
 
   ticket.messages.push({
     author: message.author.tag,
@@ -109,29 +52,14 @@ client.on(Events.MessageCreate, async (message) => {
     timestamp: new Date().toISOString()
   });
 
-  saveLogsToFile();
-
-  // Staff replies with !r
+  // Handle !r <message>
   if (message.content.startsWith('!r ')) {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const replyContent = message.content.slice(3).trim();
-    const user = await client.users.fetch(ticketOwnerId);
-    user.send(`**Staff:** ${replyContent}`).catch(() => {
-      message.reply("Failed to send message to user.");
-    });
-    return;
+    return ticketChannel.send(`**Staff Reply:** ${replyContent}`);
   }
 
-  // Staff closes ticket
-  if (message.content === '!c') {
-    if (!isStaff) return message.reply("Only staff can close tickets.");
-    await ticketChannel.send("Ticket has been closed by staff.");
-    await ticketChannel.setLocked(true).catch(() => {});
-    await ticketChannel.setArchived(true).catch(() => {});
-    return;
-  }
-
-  // Staff views logs
+  // Handle !logs @user with reaction-based pagination
   if (message.content.startsWith('!logs')) {
     if (!isStaff) return message.reply("Only staff can use this command.");
     const target = message.mentions.users.first();
@@ -180,10 +108,15 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  // Any other message = internal note
-  if (isStaff) {
-    ticketChannel.send(`*Internal note by ${message.author.tag}:* ${message.content}`);
+  // Handle !c - close ticket
+  if (message.content === '!c') {
+    if (!isStaff) return message.reply("Only staff can close tickets.");
+    await ticketChannel.send("Ticket has been closed by staff.");
+    await ticketChannel.setLocked(true).catch(() => {});
+    await ticketChannel.setArchived(true).catch(() => {});
+    return;
   }
 });
 
+// Start the bot
 client.login(process.env.DISCORD_TOKEN);
