@@ -74,6 +74,9 @@ client.on(Events.MessageCreate, async (message) => {
     const category = guild.channels.cache.find(c => c.name === modmailCategoryName && c.type === ChannelType.GuildCategory);
     if (!category) return console.error("❌ Modmail category not found!");
 
+    const staffRole = guild.roles.cache.find(role => role.name === "Staff");
+    if (!staffRole) return console.error("❌ Staff role not found!");
+
     const existingChannel = Object.entries(channelToUserMap).find(([, id]) => id === userId);
     if (existingChannel) {
       const existing = guild.channels.cache.get(existingChannel[0]);
@@ -101,7 +104,7 @@ client.on(Events.MessageCreate, async (message) => {
           deny: ['ViewChannel']
         },
         {
-          id: guild.roles.cache.find(role => role.name === "Staff").id,
+          id: staffRole.id,
           allow: ['ViewChannel', 'SendMessages']
         }
       ]
@@ -128,8 +131,8 @@ client.on(Events.MessageCreate, async (message) => {
     saveTicketData();
 
     ticketChannel.send({
-      content: `📬 New ticket from <@${message.author.id}> (**${message.author.tag}**)`,
-      allowedMentions: { users: [] }
+      content: `📬 New ticket from <@${message.author.id}> (**${message.author.tag}**)\n<@&${staffRole.id}> **A new ticket has arrived**`,
+      allowedMentions: { roles: [staffRole.id] }
     });
 
     ticketChannel.send(`**${firstMessage.author}:** ${firstMessage.content}`);
