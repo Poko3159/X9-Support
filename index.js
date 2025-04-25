@@ -35,6 +35,7 @@ if (fs.existsSync(DATA_FILE)) {
   channelToUserMap = raw.channelToUserMap || {};
 }
 
+// Debounced file save
 let saveTimeout;
 function saveTicketData() {
   clearTimeout(saveTimeout);
@@ -62,6 +63,7 @@ client.on(Events.MessageCreate, async (message) => {
   const isStaff = message.guild && message.member?.roles.cache.some(role => role.name === "Staff");
   const modmailCategoryName = "modmails";
 
+  // 🔍 Handle DMs (ticket creation)
   if (!message.guild) {
     console.log(`📩 DM from ${message.author.tag}: ${message.content}`);
 
@@ -130,16 +132,10 @@ client.on(Events.MessageCreate, async (message) => {
     });
 
     ticketChannel.send(`**${firstMessage.author}:** ${firstMessage.content}`);
-
-    // Auto-tagging @Staff role
-    const staffRole = guild.roles.cache.find(role => role.name === "Staff");
-    if (staffRole) {
-      ticketChannel.send(`@${staffRole.name}`);
-    }
-
     return;
   }
 
+  // 🎯 Ticket channel message handling
   const ticketChannel = message.channel;
   const userId = channelToUserMap[ticketChannel.id];
   if (!userId) return;
@@ -217,18 +213,23 @@ client.on(Events.MessageCreate, async (message) => {
       ticket.closedAt = new Date().toISOString();
       saveTicketData();
 
-      // Archive logs to a .txt file
-      const logFile = path.join(LOGS_DIR, `ticket-${ticketChannel.id}.txt`);
-      const logContent = ticket.messages.map(m => `${m.timestamp} - **${m.author}**: ${m.content}`).join('\n');
-      fs.writeFileSync(logFile, logContent);
+      // Ensure guild is defined
+      const guild = message.guild; // This line ensures you get the guild from the context of the message.
 
-      // Send log file to general-transcripts
-      const generalTranscriptsChannel = guild.channels.cache.find(ch => ch.name === 'general-transcripts' && ch.type === ChannelType.GuildText);
-      if (generalTranscriptsChannel) {
-        generalTranscriptsChannel.send({
-          content: `Ticket log for ${ticketChannel.name}:`,
-          files: [logFile]
-        });
+      if (guild) {
+        // Archive logs to a .txt file
+        const logFile = path.join(LOGS_DIR, `ticket-${ticketChannel.id}.txt`);
+        const logContent = ticket.messages.map(m => `${m.timestamp} - **${m.author}**: ${m.content}`).join('\n');
+        fs.writeFileSync(logFile, logContent);
+
+        // Send log file to general-transcripts
+        const generalTranscriptsChannel = guild.channels.cache.find(ch => ch.name === 'general-transcripts' && ch.type === ChannelType.GuildText);
+        if (generalTranscriptsChannel) {
+          generalTranscriptsChannel.send({
+            content: `Ticket log for ${ticketChannel.name}:`,
+            files: [logFile]
+          });
+        }
       }
     }
 
