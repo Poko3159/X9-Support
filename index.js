@@ -78,7 +78,15 @@ client.on(Events.MessageCreate, async (message) => {
     if (existingChannel) {
       const existing = guild.channels.cache.get(existingChannel[0]);
       if (existing) {
-        message.author.send("You already have an open ticket. Please wait for a response from the staff.").catch(() => {});
+        const ticket = userTickets[userId]?.find(t => t.channelId === existing.id);
+        const msg = {
+          author: message.author.tag,
+          content: message.content,
+          timestamp: new Date().toISOString()
+        };
+        ticket?.messages.push(msg);
+        saveTicketData();
+        existing.send(`**${message.author.tag}:** ${message.content}`);
         return;
       }
     }
@@ -208,8 +216,8 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const user = await client.users.fetch(userId);
-    user.send("Your ticket has been closed by the X9 Staff Team. If you need further assistance, feel free to message us again.").catch(() => {
-      ticketChannel.send("⚠️ Failed to notify the user about ticket closure.");
+    user.send("Your ticket has been closed by the X9 Staff team. If you need further assistance, feel free to message us again.").catch(() => {
+      ticketChannel.send("⚠️ Could not notify the user about ticket closure.");
     });
 
     await ticketChannel.send("🗑 Ticket will be deleted in 5 seconds.");
