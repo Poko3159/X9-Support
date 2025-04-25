@@ -86,7 +86,8 @@ client.on(Events.MessageCreate, async (message) => {
         };
         ticket?.messages.push(msg);
         saveTicketData();
-        return existing.send(`New message from **${message.author.tag}**: ${message.content}`);
+        existing.send(`**${message.author.tag}:** ${message.content}`);
+        return;
       }
     }
 
@@ -212,26 +213,12 @@ client.on(Events.MessageCreate, async (message) => {
       ticket.closedBy = message.author.tag;
       ticket.closedAt = new Date().toISOString();
       saveTicketData();
-
-      // Ensure guild is defined
-      const guild = message.guild; // This line ensures you get the guild from the context of the message.
-
-      if (guild) {
-        // Archive logs to a .txt file
-        const logFile = path.join(LOGS_DIR, `ticket-${ticketChannel.id}.txt`);
-        const logContent = ticket.messages.map(m => `${m.timestamp} - **${m.author}**: ${m.content}`).join('\n');
-        fs.writeFileSync(logFile, logContent);
-
-        // Send log file to general-transcripts
-        const generalTranscriptsChannel = guild.channels.cache.find(ch => ch.name === 'general-transcripts' && ch.type === ChannelType.GuildText);
-        if (generalTranscriptsChannel) {
-          generalTranscriptsChannel.send({
-            content: `Ticket log for ${ticketChannel.name}:`,
-            files: [logFile]
-          });
-        }
-      }
     }
+
+    const user = await client.users.fetch(userId);
+    user.send("Your ticket has been closed by the X9 Staff team. If you need further assistance, feel free to message us again.").catch(() => {
+      ticketChannel.send("⚠️ Could not notify the user about ticket closure.");
+    });
 
     await ticketChannel.send("🗑 Ticket will be deleted in 5 seconds.");
     setTimeout(() => {
