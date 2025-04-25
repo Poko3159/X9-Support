@@ -35,7 +35,6 @@ if (fs.existsSync(DATA_FILE)) {
   channelToUserMap = raw.channelToUserMap || {};
 }
 
-// Debounced file save
 let saveTimeout;
 function saveTicketData() {
   clearTimeout(saveTimeout);
@@ -63,7 +62,6 @@ client.on(Events.MessageCreate, async (message) => {
   const isStaff = message.guild && message.member?.roles.cache.some(role => role.name === "Staff");
   const modmailCategoryName = "modmails";
 
-  // 🔍 Handle DMs (ticket creation)
   if (!message.guild) {
     console.log(`📩 DM from ${message.author.tag}: ${message.content}`);
 
@@ -86,8 +84,7 @@ client.on(Events.MessageCreate, async (message) => {
         };
         ticket?.messages.push(msg);
         saveTicketData();
-        existing.send(`**${message.author.tag}:** ${message.content}`);
-        return;
+        return existing.send(`New message from **${message.author.tag}**: ${message.content}`);
       }
     }
 
@@ -133,10 +130,16 @@ client.on(Events.MessageCreate, async (message) => {
     });
 
     ticketChannel.send(`**${firstMessage.author}:** ${firstMessage.content}`);
+
+    // Auto-tagging @Staff role
+    const staffRole = guild.roles.cache.find(role => role.name === "Staff");
+    if (staffRole) {
+      ticketChannel.send(`@${staffRole.name}`);
+    }
+
     return;
   }
 
-  // 🎯 Ticket channel message handling
   const ticketChannel = message.channel;
   const userId = channelToUserMap[ticketChannel.id];
   if (!userId) return;
@@ -213,12 +216,21 @@ client.on(Events.MessageCreate, async (message) => {
       ticket.closedBy = message.author.tag;
       ticket.closedAt = new Date().toISOString();
       saveTicketData();
-    }
 
-    const user = await client.users.fetch(userId);
-    user.send("Your ticket has been closed by the X9 Staff team. If you need further assistance, feel free to message us again.").catch(() => {
-      ticketChannel.send("⚠️ Could not notify the user about ticket closure.");
-    });
+      // Archive logs to a .txt file
+      const logFile = path.join(LOGS_DIR, `ticket-${ticketChannel.id}.txt`);
+      const logContent = ticket.messages.map(m => `${m.timestamp} - **${m.author}**: ${m.content}`).join('\n');
+      fs.writeFileSync(logFile, logContent);
+
+      // Send log file to general-transcripts
+      const generalTranscriptsChannel = guild.channels.cache.find(ch => ch.name === 'general-transcripts' && ch.type === ChannelType.GuildText);
+      if (generalTranscriptsChannel) {
+        generalTranscriptsChannel.send({
+          content: `Ticket log for ${ticketChannel.name}:`,
+          files: [logFile]
+        });
+      }
+    }
 
     await ticketChannel.send("🗑 Ticket will be deleted in 5 seconds.");
     setTimeout(() => {
